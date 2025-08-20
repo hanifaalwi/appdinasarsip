@@ -1,0 +1,98 @@
+stages:
+  - image-building
+  - deploy-dev
+  - deploy-prod
+variables:
+  CICD_BRANCH: main
+  CI_REGISTRY_USER: $REGISTRY_USER
+  CI_REGISTRY_PASSWORD: $REGISTRY_PASSWORD
+  CI_REGISTRY: $REGISTRY
+  DOCKER_IMAGE: $CI_REGISTRY_IMAGE:latest
+  # untuk env development
+  SERVICES_NAME_DEV: apparsip-dev
+  SERVICES_PORT_DEV: 8112
+  SERVICES_REPLICA_DEV: 1
+  SERVICES_CPU_DEV: 1
+  SERVICES_RAM_DEV: 1g
+  SERVICES_ENV_DEV: deploy/appmyarsip-dev.env
+  # untuk env production
+  SERVICES_NAME_PROD: apparsip-prod
+  SERVICES_PORT_PROD: 8111
+  SERVICES_REPLICA_PROD: 1
+  SERVICES_CPU_PROD: 1
+  SERVICES_RAM_PROD: 1g
+  SERVICES_ENV_PROD: deploy/appmyarsip-prod.env
+build-image:
+  stage: image-building
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - echo "Current Branch $CI_COMMIT_REF_NAME"
+    - BASE_BRANCH=$(echo "$CI_COMMIT_REF_NAME" | cut -d'/' -f1)
+    - echo "Base branch $BASE_BRANCH"
+    - >
+      if [ "$BASE_BRANCH" == "main" ]; then
+       cp .env.example .env
+      else
+       cp .env.example .env
+      fi
+  script:
+    - docker build -t $DOCKER_IMAGE . --progress=plain --no-cache
+    - docker push $DOCKER_IMAGE
+    - docker rmi $DOCKER_IMAGE
+  tags:
+    - runner-sumbarprov
+  only:
+    - main
+deploy-development:
+  stage: deploy-dev
+  before_script:
+    - docker image ls
+    - docker service ls
+  script:
+    - >
+      if docker service inspect $SERVICES_NAME_DEV > /dev/null 2>&1; then
+          docker service update --with-registry-auth --update-parallelism 1 --image $DOCKER_IMAGE $SERVICES_NAME_DEV
+      else
+          docker service create \
+            --replicas $SERVICES_REPLICA_DEV \
+            --limit-cpu $SERVICES_CPU_DEV \
+            --limit-memory $SERVICES_RAM_DEV \
+            --restart-condition any \
+            -p $SERVICES_PORT_DEV:80 \
+            --constraint 'node.labels.role == worker' \
+            --env-file $SERVICES_ENV_DEV \
+            --name $SERVICES_NAME_DEV \
+            --with-registry-auth \
+            $DOCKER_IMAGE    
+      fi
+  tags:
+    - runner-sumbarprov
+  only:
+    - main
+deploy-production:
+  stage: deploy-prod
+  before_script:
+    - docker image ls
+    - docker service ls
+  script:
+    - >
+      if docker service inspect $SERVICES_NAME_PROD > /dev/null 2>&1; then
+          docker service update --with-registry-auth --update-parallelism 1 --image $DOCKER_IMAGE $SERVICES_NAME_PROD
+      else
+          docker service create \
+            --replicas $SERVICES_REPLICA_PROD \
+            --limit-cpu $SERVICES_CPU_PROD \
+            --limit-memory $SERVICES_RAM_PROD \
+            --restart-condition any \
+            -p $SERVICES_PORT_PROD:80 \
+            --constraint 'node.labels.role == worker' \
+            --env-file $SERVICES_ENV_PROD \
+            --name $SERVICES_NAME_PROD \
+            --with-registry-auth \
+            $DOCKER_IMAGE    
+      fi
+  tags:
+    - runner-sumbarprov
+  when: manual
+  only:
+    - main
